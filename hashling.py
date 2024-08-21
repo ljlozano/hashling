@@ -73,8 +73,16 @@ def build_logger() -> logging.Logger:
 	# Custom logger
 	logger = logging.getLogger(__name__)
 	logger.setLevel(logging.DEBUG)
-	# Need logic to create folder if it doesn't exist.
-	file_handler = logging.FileHandler('./files/log/hashling_operations.log')
+	log_dir = './files/log/'
+
+	try:
+		if not os.path.exists(log_dir):
+			os.makedirs(log_dir)
+			print(f"Created log directory!")
+	except FileNotFoundError as e:
+		print(f"Error while initializing logger, could not create filepath... {e}")
+
+	file_handler = logging.FileHandler(os.path.join(log_dir, 'hashling_operations.log'))
 	console_handler = logging.StreamHandler()  # Log to the console
 	file_handler.setLevel(logging.DEBUG)
 	console_handler.setLevel(logging.DEBUG)
