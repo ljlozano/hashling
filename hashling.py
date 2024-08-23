@@ -1,24 +1,68 @@
 '''
 Used for computing various hashes of a given file.
-Used for comparing the hashes of two files.
-+ More coming.
+Used for comparing the hashes of various files.
+Used for creating a versioned master list of hashes and their respective filenames and metadata.
+
+More coming.
 
 Added:
 - Logging
+- Database
 '''
 import hashlib
 import logging
 import sys
 import os
+import sqlite3
+import atexit
+
+
+# Constants
+DB_PATH = './files/db/'
+
+
+# Database Connection
+try:
+	if not os.path.exists(DB_PATH):
+		os.makedirs(DB_PATH)
+		print(f"Created database directory at {DB_PATH}...")
+except (FileNotFoundError, OSError) as e:
+	print(f"Error while initializing database directory, could not create filepath... {e}")
 
 
 class Hashling:
 
-	def __init__(self, logger) -> None:
+	def __init__(self, logger, db_path='./files/db/file_hashes.db') -> None:
 		self.logger = logger
+		self.db_path = db_path
+		self.make_db()
+		self.make_table()
+
+	def make_db(self) -> None:
+		self.conn = sqlite3.connect(self.db_path)
+		self.cursor = self.conn.cursor()
+
+	def make_table(self) -> None:
+		self.cursor.execute('''
+			CREATE TABLE IF NOT EXISTS file_hashes (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				file_name TEXT NOT NULL,
+				file_size TEXT NOT NULL,
+				file_hash TEXT NOT NULL,
+				timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+				)
+			''')
+		self.conn.commit()
+
+	def insert_file_hashes(self, hashes: list) -> None:
+		self.cursor.executemany('''
+			INSERT INTO file_hashes (file_name, file_size, file_hash)
+			VALUES (?, ?, ?)
+			''', hashes)
+		self.conn.commit()
 
 	def log_hash_operation(self, file_path: str, hash_value: str) -> None:
-		self.logger.debug(f'Hashed file: {file_path}, Hash: {hash_value}')
+		self.logger.debug(f'Computed: {file_path} | Hash: {hash_value}')
 
 	def compute_hash(self, algo: str = 'sha256', path: str = "./files/dir/default1.txt") -> str:
 		try:
@@ -48,29 +92,23 @@ class Hashling:
 			self.logger.debug(f"The files appears to different with the following hashes: {hash1} // {hash2}")
 		return ans
 
-	def hash_directory(self, directory : str=os.getcwd(), style="recur") -> dict:
-		hash_directory = {}
+	def hash_directory(self, directory : str=os.getcwd(), style="recur") -> None:
+		hashes = []
 		for root, dirs, files in os.walk(directory):
-			if len(directory) < 1:
-				self.logger.debug(f"Directory: {directory} is empty or inaccessible.")
-			self.logger.debug(f"Found the following roots: {root} - (located in {directory})")
-			if len(dirs) < 1:
-				self.logger.debug(f"There appears to be no subdirectories located within {root}: {dirs} - (located in {directory})")
-			else:
-				self.logger.debug(f"Found the following directories within {root}: {dirs} - (located in {directory})")
-			if len(files) > 0:
-				self.logger.debug(f"Hashing {len(files)} within root dir: {directory}...")
-				for file in files:
-					hash_directory[file] = self.compute_hash(path=directory + "./files/dir/hashall/" + file)
-				self.logger.debug(f"Finished hashing {len(files)} within root dir: {directory}...")
-			if len(files) > 0 and len(directory) > 0:
-				self.logger.debug(f"Found the following files located within all subdirs of {root}: {files} - (located in {directory})")
-		return hash_directory
-
+			for file in files:
+				full_path = os.path.join(root, file)
+				file_hash = self.compute_hash(path=full_path)
+				if file_hash:
+					file_size = os.path.getsize(full_path)
+					hashes.append((file, file_size, file_hash))
+					self.logger.debug(f"Added {file}'s hash: {file_hash} to the database.")
+				else:
+					self.logger.debug(f"Unable to add {file}'s hash to the database.  Hash: {file_hash}")
+		if hashes:
+			self.insert_file_hashes(hashes)
 
 
 def build_logger() -> logging.Logger:
-	# Custom logger
 	logger = logging.getLogger(__name__)
 	logger.setLevel(logging.DEBUG)
 	log_dir = './files/log/'
@@ -79,7 +117,7 @@ def build_logger() -> logging.Logger:
 		if not os.path.exists(log_dir):
 			os.makedirs(log_dir)
 			print(f"Created log directory!")
-	except FileNotFoundError as e:
+	except (FileNotFoundError, OSError) as e:
 		print(f"Error while initializing logger, could not create filepath... {e}")
 
 	file_handler = logging.FileHandler(os.path.join(log_dir, 'hashling_operations.log'))
@@ -94,32 +132,46 @@ def build_logger() -> logging.Logger:
 	logger.addHandler(console_handler)
 	return logger
 
+def close_db(hashling) -> None:
+	if hashling.conn:
+		try:
+			hashling.cursor.close()
+			hashling.conn.close()
+		except sqlite3.ProgrammingError as e:
+			hashling.logger.debug(f"Could not close database due to error: {e}...")
 
 def loop(hashling) -> None:
-	# Text interface.
-	while True:
-		hashling.logger.info("[1] - Compute the hash of a file. ")
-		hashling.logger.info("[2] - Compare the hashes of two files for equality. ")
-		hashling.logger.info("[3] - Recursively dump all dirs/subdirs/filenames (DEFAULTS TO CWD).")
-		hashling.logger.info("[x] - Exit the program. ")
-		ans = input("What would you like to do? : ")
-		if ans == '1':
-			computed_hash = hashling.compute_hash()
-		elif ans == '2':
-			computed_hashes = hashling.compare_hashes()
-		elif ans == '3':
-			recursive_dir_hashing = hashling.hash_directory()
-		elif ans == 'x':
-			hashling.logger.debug("Shutting down...")
-			sys.exit()
-		else:
-			hashling.logger.debug(f"Invalid choice {ans} - please choose from the list.")
+	# Text interface
+	try:
+		while True:
+			hashling.logger.info("[1] - Compute the hash of a file. ")
+			hashling.logger.info("[2] - Compare the hashes of two files for equality. ")
+			hashling.logger.info("[3] - Recursively dump all dirs/subdirs/filenames (DEFAULTS TO CWD).")
+			hashling.logger.info("[x] - Exit the program. ")
+			ans = input("What would you like to do? : ")
+			if ans == '1':
+				computed_hash = hashling.compute_hash()
+			elif ans == '2':
+				computed_hashes = hashling.compare_hashes()
+			elif ans == '3':
+				recursive_dir_hashing = hashling.hash_directory()
+			elif ans == 'x':
+				hashling.logger.debug("Shutting down...")
+				sys.exit()
+			else:
+				hashling.logger.debug(f"Invalid choice {ans} - please choose from the list.")
+	except KeyboardInterrupt:
+		hashling.logger.debug("Program halted by user... shutting DB down then closing...")
 
 def driver() -> None:
 	clogger = build_logger()
 	hling = Hashling(clogger)
+	atexit.register(close_db, hling) # Close database regardless of how program shuts down.
 	hling.logger.debug("Successfully booted.  Welcome!")
-	loop(hling)
+	try:
+		loop(hling)
+	except KeyboardInterrupt:
+		hling.logger.debug("Program halted by user...")
 
 if __name__ == '__main__':
 	driver()
