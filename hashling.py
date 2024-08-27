@@ -3,7 +3,10 @@ Used for computing various hashes of a given file.
 Used for comparing the hashes of various files.
 Used for creating a versioned master list of hashes and their respective filenames and metadata.
 
-More coming.
+@todo:
+- change to args based instead of text-gui.
+- ability to filter what files are hashed, eg: via file extensions and ignoring hidden files.
+- directory hash comparisons
 
 Added:
 - Logging
@@ -18,23 +21,18 @@ import atexit
 
 
 # Constants
-DB_PATH = './files/db/'
-
-
-# Database Connection
-try:
-	if not os.path.exists(DB_PATH):
-		os.makedirs(DB_PATH)
-		print(f"Created database directory at {DB_PATH}...")
-except (FileNotFoundError, OSError) as e:
-	print(f"Error while initializing database directory, could not create filepath... {e}")
+DB_DIR = './files/db/'
+DB_PATH = './files/db/file_hashes.db'
+LOG_DIR = './files/log/'
+LOG_FILE_NAME = 'hashling_operations.log'
 
 
 class Hashling:
 
-	def __init__(self, logger, db_path='./files/db/file_hashes.db') -> None:
+	def __init__(self, logger, db_path) -> None:
 		self.logger = logger
 		self.db_path = db_path
+		self.blacklist_extensions = []
 		self.make_db()
 		self.make_table()
 
@@ -64,7 +62,7 @@ class Hashling:
 	def log_hash_operation(self, file_path: str, hash_value: str) -> None:
 		self.logger.debug(f'Computed: {file_path} | Hash: {hash_value}')
 
-	def compute_hash(self, algo: str = 'sha256', path: str = "./files/dir/default1.txt") -> str:
+	def compute_hash(self, algo: str='sha256', path: str="./files/dir/default1.txt") -> str:
 		try:
 			with open(path, 'rb') as f:
 				hd = hashlib.file_digest(f, algo)
@@ -78,8 +76,7 @@ class Hashling:
 			self.logger.debug(f"Unable to compute hash from {path} using {algo}")
 			return ""
 
-	def compare_hashes(self, algo: str = 'sha256', file1: str = './files/dir/default1.txt', file2: str = './files/dir/default2.txt') -> bool:
-		# Improve by taking an array of hash locations to compute for equality rather than being limited to 2.
+	def compare_hashes(self, algo: str='sha256', file1: str='./files/dir/default1.txt', file2: str='./files/dir/default2.txt') -> bool:
 		hash1 = self.compute_hash(path=file1, algo=algo)
 		hash2 = self.compute_hash(path=file2, algo=algo)
 		if not hash1 or not hash2:
@@ -92,9 +89,43 @@ class Hashling:
 			self.logger.debug(f"The files appears to different with the following hashes: {hash1} // {hash2}")
 		return ans
 
-	def hash_directory(self, directory : str=os.getcwd(), style="recur") -> None:
+	def add_blacklist_extension(self, extention: str) -> bool:
+		self.blacklist_extensions.append(extention)
+		return extention in self.blacklist_extensions
+
+	def remove_blacklist_extension(self, extention: str) -> bool:
+		try:
+			self.blacklist_extensions.remove(extention)
+		except ValueError:
+			self.logger.debug(f"Tried to remove extension: {extention} but was not found within extension blacklist.")
+		return extention in self.blacklist_extensions
+
+	def get_blacklist_extensions(self) -> list:
+		return self.blacklist_extensions
+
+	def is_file_hidden(self, filename: str) -> bool:
+		return filename.startswith(".")
+
+	def hash_directory(
+			self,
+			directory: str=os.getcwd(),
+			style: str="recur",
+			skip_hidden_files: bool=True,
+			skip_all_hidden: bool=True,
+			extention_blacklisting: bool=True
+		) -> None:
+		'''
+		Recursively hash a directory and all sub-directories according to the given parameters.
+		Can skip hidden files and hidden directories.
+		@todo:
+			Process file regardless of parent directory status.
+			Process file if it exists within a hidden directory.
+		'''
 		hashes = []
 		for root, dirs, files in os.walk(directory):
+			if skip_all_hidden:
+				dirs[:] = [d for d in dirs if not self.is_file_hidden(d)] # Skip hidden directories
+				files = [f for f in files if not self.is_file_hidden(f)] # Skip hidden files
 			for file in files:
 				full_path = os.path.join(root, file)
 				file_hash = self.compute_hash(path=full_path)
@@ -108,19 +139,19 @@ class Hashling:
 			self.insert_file_hashes(hashes)
 
 
+def create_path(directory: str) -> None:
+	try:
+		if not os.path.exists(directory):
+			os.makedirs(directory)
+			print(f"Created directory at {directory}...")
+	except (FileNotFoundError, OSError) as e:
+		print(f"Error while creating directory, could not create filepath... {e}")
+
 def build_logger() -> logging.Logger:
 	logger = logging.getLogger(__name__)
 	logger.setLevel(logging.DEBUG)
-	log_dir = './files/log/'
 
-	try:
-		if not os.path.exists(log_dir):
-			os.makedirs(log_dir)
-			print(f"Created log directory!")
-	except (FileNotFoundError, OSError) as e:
-		print(f"Error while initializing logger, could not create filepath... {e}")
-
-	file_handler = logging.FileHandler(os.path.join(log_dir, 'hashling_operations.log'))
+	file_handler = logging.FileHandler(os.path.join(LOG_DIR, LOG_FILE_NAME))
 	console_handler = logging.StreamHandler()  # Log to the console
 	file_handler.setLevel(logging.DEBUG)
 	console_handler.setLevel(logging.DEBUG)
@@ -164,8 +195,10 @@ def loop(hashling) -> None:
 		hashling.logger.debug("Program halted by user... shutting DB down then closing...")
 
 def driver() -> None:
+	create_path(DB_DIR)
+	create_path(LOG_DIR)
 	clogger = build_logger()
-	hling = Hashling(clogger)
+	hling = Hashling(logger=clogger, db_path=DB_PATH)
 	atexit.register(close_db, hling) # Close database regardless of how program shuts down.
 	hling.logger.debug("Successfully booted.  Welcome!")
 	try:
