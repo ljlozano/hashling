@@ -1,6 +1,8 @@
 """
 Hashling
 
+hashling.py
+
 This program is designed for computing and comparing file hashes, managing a database of file hashes,
 and handling directories of files with optional filtering and blacklisting.
 
@@ -229,7 +231,7 @@ class Hashling:
 		) -> None:
 		'''
 		Hashes all files in a directory and its subdirectories, optionally skipping hidden files and directories,
-    	and respecting file extension blacklists.
+		respecting file extension blacklists.
 
 		Args:
 			directory (str): The directory start hashing from.
