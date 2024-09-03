@@ -14,11 +14,10 @@ Features:
 
 @todo:
 - Implement a GUI interface for easier interaction.
-- Add functionality to filter files based on extensions and ignore hidden files.
 - Enhance directory hashing with additional traversal methods.
 - Improve error handling and logging.
 - Include test cases and more documentation.
-- Explore and integrate more advanced features, such as directory hash comparisons and versioned file management.
+- Integrate directory hash comparisons and versioned file management.
 """
 
 import hashlib
@@ -52,7 +51,7 @@ class Hashling:
 		'''
 		self.logger = logger
 		self.db_path = db_path
-		self.blacklist_extensions = []
+		self.blacklist_extensions = ['.py']
 		self.make_db()
 		self.make_table()
 
@@ -221,6 +220,22 @@ class Hashling:
 		'''
 		return filename.startswith(".")
 
+	def is_file_blacklisted(self, filename: str) -> bool:
+		'''
+		Checks if a given filename contains any blacklisted extensions.
+
+		Args:
+			filename (str): The name of the file in string format
+
+		Return:
+			bool: Yes if blacklisted, no if not blacklisted.
+		'''
+		for i in range(len(self.get_blacklist_extensions())):
+			if filename.endswith(self.blacklist_extensions[i]):
+				self.logger.debug(f"Found blacklisted file and ignored it: {filename}")
+				return True
+		return False
+
 	def hash_directory(
 			self,
 			directory: str=os.getcwd(),
@@ -246,13 +261,20 @@ class Hashling:
 		@todo:
 			Process file regardless of parent directory status.
 			Process file if it exists within a hidden directory.
-			Add traversal of directory using different 
+			Add different ways of directory traversal.
 		'''
 		hashes = []
 		for root, dirs, files in os.walk(directory):
 			if skip_all_hidden:
-				dirs[:] = [d for d in dirs if not self.is_file_hidden(d)] # Skip hidden directories
-				files = [f for f in files if not self.is_file_hidden(f)] # Skip hidden files
+				if extension_blacklisting: # Skip hidden directories and blacklisted files.
+					dirs[:] = [d for d in dirs if not self.is_file_hidden(d)] # Skip hidden directories
+					files = [f for f in files if not self.is_file_hidden(f) and not self.is_file_blacklisted(f)]
+				else:
+					dirs[:] = [d for d in dirs if not self.is_file_hidden(d)]
+					files = [f for f in files if not self.is_file_hidden(f)]
+			else:
+				if extension_blacklisting: # Not skipping hidden but skipping blacklisted.
+					files = [f for f in files if not self.is_file_blacklisted(f)]				
 			for file in files:
 				full_path = os.path.join(root, file)
 				file_hash = self.compute_hash(path=full_path)
