@@ -13,8 +13,8 @@ Features:
 - Hash directories recursively, with options to skip hidden files and apply extension blacklisting.
 
 @todo:
-- Implement a GUI interface for easier interaction.
-- Enhance directory hashing with additional traversal methods.
+- Implement a arg parsed way to interact with the program instead of a loop.
+- Enhance directory hashing with additional traversal methods (?).
 - Improve error handling and logging.
 - Include test cases and more documentation.
 - Integrate directory hash comparisons and versioned file management.
@@ -24,8 +24,8 @@ import hashlib
 import logging
 import sys
 import os
-import sqlite3
 import atexit
+import utils
 
 
 # Constants
@@ -49,63 +49,11 @@ class Hashling:
 		Returns:
 			None
 		'''
+		self.conn, self.cursor = utils.make_db(db_path)
+		utils.make_table(self.conn, self.cursor)
 		self.logger = logger
 		self.db_path = db_path
-		self.blacklist_extensions = ['.py']
-		self.make_db()
-		self.make_table()
-
-	def make_db(self) -> None:
-		'''
-		Establishes a connection & cursor to the sqlite3 database.
-
-		Returns:
-			None
-		'''
-		self.conn = sqlite3.connect(self.db_path)
-		self.cursor = self.conn.cursor()
-
-	def make_table(self) -> None:
-		'''
-		SQL Command to create a file_hashes table (if not already existing) with the following columns:
-			id
-			file_name
-			file_size
-			file_hash
-			timestamp
-
-		Returns:
-			None
-		'''
-		self.cursor.execute('''
-			CREATE TABLE IF NOT EXISTS file_hashes (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				file_name TEXT NOT NULL,
-				file_size TEXT NOT NULL,
-				file_hash TEXT NOT NULL,
-				timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-				)
-			''')
-		self.conn.commit()
-
-	def insert_file_hashes(self, hashes: list) -> None:
-		'''
-		SQL Command to insert values into file_hashes table:
-			file_name
-			file_size
-			file_hash
-
-		Args:
-			hashes (list): The list of tuples containing the file hash and metadata to insert
-
-		Returns:
-			None
-		'''
-		self.cursor.executemany('''
-			INSERT INTO file_hashes (file_name, file_size, file_hash)
-			VALUES (?, ?, ?)
-			''', hashes)
-		self.conn.commit()
+		self.blacklist_extensions = ['.py', '.pyc']
 
 	def log_hash_operation(self, file_path: str, hash_value: str) -> None:
 		'''
@@ -285,64 +233,8 @@ class Hashling:
 				else:
 					self.logger.debug(f"Unable to add {file}'s hash to the database.  Hash: {file_hash}")
 		if hashes:
-			self.insert_file_hashes(hashes)
+			utils.insert_file_hashes(self.conn, self.cursor, hashes)
 
-
-def create_path(directory: str) -> None:
-	'''
-	Creates a directory from provided directory string parameter.
-
-	Args:
-		directory str: A string containing the path of the directory to create.
-	
-	Returns:
-		None
-	'''
-	try:
-		if not os.path.exists(directory):
-			os.makedirs(directory)
-			print(f"Created directory at {directory}...")
-	except (FileNotFoundError, OSError) as e:
-		print(f"Error while creating directory, could not create filepath... {e}")
-
-def build_logger() -> logging.Logger:
-	'''
-	Builds a custom logger that logs to both an external log file as well as the console.
-	
-	Args:
-		None
-	
-	Returns:
-		logging.Logger: A Logger object created from the current file.
-	'''
-	logger = logging.getLogger(__name__)
-	logger.setLevel(logging.DEBUG)
-
-	file_handler = logging.FileHandler(os.path.join(LOG_DIR, LOG_FILE_NAME))
-	console_handler = logging.StreamHandler()  # Log to the console
-	file_handler.setLevel(logging.DEBUG)
-	console_handler.setLevel(logging.DEBUG)
-	
-	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-	file_handler.setFormatter(formatter)
-	console_handler.setFormatter(formatter)
-	logger.addHandler(file_handler)
-	logger.addHandler(console_handler)
-	return logger
-
-def close_db(hashling) -> None:
-	'''
-	Closes the connection & cursor to the sqlite3 database (if it is connected).
-
-	Returns:
-		None
-	'''
-	if hashling.conn:
-		try:
-			hashling.cursor.close()
-			hashling.conn.close()
-		except sqlite3.ProgrammingError as e:
-			hashling.logger.debug(f"Could not close database due to error: {e}...")
 
 def loop(hashling) -> None:
 	'''
@@ -375,6 +267,13 @@ def loop(hashling) -> None:
 	except KeyboardInterrupt:
 		hashling.logger.debug("Program halted by user... shutting DB down then closing...")
 
+def setup_directories() -> None:
+	utils.create_path(DB_DIR)
+	utils.create_path(LOG_DIR)
+
+def close_database(hashling: object) -> None:
+	utils.close_db(hashling.conn, hashling.cursor)
+
 def driver() -> None:
 	'''
 	Main driver function to run the various stages of the program's execution.
@@ -382,11 +281,10 @@ def driver() -> None:
 	Returns:
 		None
 	'''
-	create_path(DB_DIR)
-	create_path(LOG_DIR)
-	clogger = build_logger()
-	hling = Hashling(logger=clogger, db_path=DB_PATH)
-	atexit.register(close_db, hling) # Close database regardless of how program shuts down.
+	setup_directories()
+	logger = utils.build_logger(LOG_DIR, LOG_FILE_NAME)
+	hling = Hashling(logger=logger, db_path=DB_PATH)
+	atexit.register(lambda: close_database(hling)) # Close database regardless of how program shuts down.
 	hling.logger.debug("Successfully booted.  Welcome!")
 	try:
 		loop(hling)
