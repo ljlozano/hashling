@@ -211,7 +211,7 @@ class Hashling:
 			Process file if it exists within a hidden directory.
 			Add different ways of directory traversal.
 		'''
-		hashes = []
+		hashes = list()
 		for root, dirs, files in os.walk(directory):
 			if skip_all_hidden:
 				if extension_blacklisting: # Skip hidden directories and blacklisted files.
